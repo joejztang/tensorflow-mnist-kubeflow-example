@@ -1,0 +1,467 @@
+# PIPELINE DEFINITION
+# Name: mnist-pipeline
+# Inputs:
+#    epochs: int
+#    model_version: str
+components:
+  comp-evaluate:
+    executorLabel: exec-evaluate
+    inputDefinitions:
+      artifacts:
+        model_artifact:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+        x_test_input:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        y_test_input:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+      parameters:
+        model_version:
+          defaultValue: '1'
+          isOptional: true
+          parameterType: STRING
+        unique_labels:
+          parameterType: NUMBER_INTEGER
+    outputDefinitions:
+      artifacts:
+        metrics:
+          artifactType:
+            schemaTitle: system.ClassificationMetrics
+            schemaVersion: 0.0.1
+        scalar_metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+  comp-load-data:
+    executorLabel: exec-load-data
+    outputDefinitions:
+      artifacts:
+        x_test_input:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        x_train_input:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        y_test_input:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        y_train_input:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-preprocess-data:
+    executorLabel: exec-preprocess-data
+    inputDefinitions:
+      artifacts:
+        x_test_input:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        x_train_input:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        y_test_input:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        y_train_input:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+    outputDefinitions:
+      artifacts:
+        x_test_pre:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        x_train_pre:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        y_test_pre:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        y_train_pre:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+      parameters:
+        input_shape:
+          parameterType: STRING
+        unique_classes:
+          parameterType: NUMBER_INTEGER
+  comp-train:
+    executorLabel: exec-train
+    inputDefinitions:
+      artifacts:
+        x_train_pre:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+        y_train_pre:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+      parameters:
+        batch_size:
+          defaultValue: 64.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        epochs:
+          defaultValue: 10.0
+          isOptional: true
+          parameterType: NUMBER_INTEGER
+        model_version:
+          defaultValue: '1'
+          isOptional: true
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        log:
+          artifactType:
+            schemaTitle: system.Artifact
+            schemaVersion: 0.0.1
+        model_artifact:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-evaluate:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - evaluate
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.11.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&\
+          \  python3 -m pip install --quiet --no-warn-script-location 'scikit-learn'\
+          \ && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef evaluate(\n    model_artifact: Input[Model],\n    metrics: Output[ClassificationMetrics],\n\
+          \    scalar_metrics: Output[Metrics],\n    x_test_input: Input[Dataset],\n\
+          \    y_test_input: Input[Dataset],\n    unique_labels:int,\n    model_version:str\
+          \ = \"1\",\n):\n    from tensorflow.keras.metrics import Precision\n   \
+          \ from tensorflow.keras.models import load_model\n    from tensorflow.keras.utils\
+          \ import to_categorical\n    from sklearn.metrics import confusion_matrix\n\
+          \    import numpy as np\n    import pickle\n    import tensorflow as tf\n\
+          \n    # model = tf.keras.layers.TFSMLayer(f\"{model_artifact.path}/{model_version}\"\
+          , call_endpoint=\"serving_default\")\n    model = load_model(f\"{model_artifact.path}/{model_version}_model.keras\"\
+          )\n    # model = tf.saved_model.load(f\"{model_artifact.path}/{model_version}\"\
+          )\n\n    batch_size = 128\n\n    with open(x_test_input.path, \"rb\") as\
+          \ file:\n        x_test = pickle.load(file)\n\n    with open(y_test_input.path,\
+          \ \"rb\") as file:\n        y_test = pickle.load(file)\n\n    # predictions\
+          \ = model(x_test)\n    predictions = model.predict(x_test, batch_size=batch_size)\n\
+          \    predictions = (predictions >= 0.5).astype(int)\n\n    y_test = to_categorical(y_test)\n\
+          \n    metrics.log_confusion_matrix(\n        [\"0\", \"1\", \"2\", \"3\"\
+          , \"4\", \"5\", \"6\", \"7\", \"8\", \"9\"],\n        confusion_matrix(\n\
+          \            y_test.argmax(axis=1), predictions.argmax(axis=1)\n       \
+          \ ).tolist(),  # .tolist() to convert np array to list.\n    )\n    m =\
+          \ Precision()\n    m.update_state(y_test, predictions)\n    loss, acc =\
+          \ model.evaluate(x_test, y_test.argmax(axis=1), batch_size=batch_size)\n\
+          \    scalar_metrics.log_metric(\"accuracy\", acc)\n    scalar_metrics.log_metric(\"\
+          loss\", loss)\n    scalar_metrics.log_metric(\"precision\", m.result().numpy().tolist())\n\
+          \n"
+        image: tensorflow/tensorflow:latest-gpu
+        resources:
+          cpuLimit: 1.0
+          cpuRequest: 1.0
+          memoryLimit: 4.0
+          memoryRequest: 4.0
+          resourceCpuLimit: '1'
+          resourceCpuRequest: '1'
+          resourceMemoryLimit: 4G
+          resourceMemoryRequest: 4G
+    exec-load-data:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - load_data
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.11.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef load_data(\n    x_train_input: Output[Dataset],\n    y_train_input:\
+          \ Output[Dataset],\n    x_test_input: Output[Dataset],\n    y_test_input:\
+          \ Output[Dataset],\n):\n    from keras.datasets import mnist\n    import\
+          \ pickle\n\n    # load dataset\n    (x_train, y_train), (x_test, y_test)\
+          \ = mnist.load_data()\n\n    with open(x_train_input.path, \"wb\") as file:\n\
+          \        pickle.dump(x_train, file)\n\n    with open(y_train_input.path,\
+          \ \"wb\") as file:\n        pickle.dump(y_train, file)\n\n    with open(x_test_input.path,\
+          \ \"wb\") as file:\n        pickle.dump(x_test, file)\n\n    with open(y_test_input.path,\
+          \ \"wb\") as file:\n        pickle.dump(y_test, file)\n\n"
+        image: tensorflow/tensorflow:latest-gpu
+        resources:
+          cpuLimit: 1.0
+          cpuRequest: 1.0
+          memoryLimit: 4.0
+          memoryRequest: 4.0
+          resourceCpuLimit: '1'
+          resourceCpuRequest: '1'
+          resourceMemoryLimit: 4G
+          resourceMemoryRequest: 4G
+    exec-preprocess-data:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - preprocess_data
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.11.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef preprocess_data(\n    x_train_input: Input[Dataset],\n    y_train_input:\
+          \ Input[Dataset],\n    x_test_input: Input[Dataset],\n    y_test_input:\
+          \ Input[Dataset],\n    x_train_pre: Output[Dataset],\n    y_train_pre: Output[Dataset],\n\
+          \    x_test_pre: Output[Dataset],\n    y_test_pre: Output[Dataset],\n) ->\
+          \ NamedTuple(\"Preprocessed\", input_shape=str, unique_classes=int):\n \
+          \   import pickle\n    import numpy as np\n\n\n    # load data from last\
+          \ step\n    with open(x_train_input.path, \"rb\") as file:\n        x_train\
+          \ = pickle.load(file)\n    with open(y_train_input.path, \"rb\") as file:\n\
+          \        y_train = pickle.load(file)\n    with open(x_test_input.path, \"\
+          rb\") as file:\n        x_test = pickle.load(file)\n    with open(y_test_input.path,\
+          \ \"rb\") as file:\n        y_test = pickle.load(file)\n\n    x_train=x_train.reshape(x_train.shape[0],\
+          \ x_train.shape[1], x_train.shape[2], 1)\n    x_train=x_train / 255.0\n\
+          \    x_test = x_test.reshape(x_test.shape[0], x_test.shape[1], x_test.shape[2],\
+          \ 1)\n    x_test=x_test/255.0\n\n    with open(x_train_pre.path, \"wb\"\
+          ) as file:\n        pickle.dump(x_train, file)\n    with open(y_train_pre.path,\
+          \ \"wb\") as file:\n        pickle.dump(y_train, file)\n    with open(x_test_pre.path,\
+          \ \"wb\") as file:\n        pickle.dump(x_test, file)\n    with open(y_test_pre.path,\
+          \ \"wb\") as file:\n        pickle.dump(y_test, file)\n\n    outputs = NamedTuple(\"\
+          Preprocessed\", input_shape=str, unique_classes=int)\n    return outputs(str(x_train.shape),\
+          \ len(np.unique(y_train)))\n\n"
+        image: tensorflow/tensorflow:latest-gpu
+        resources:
+          cpuLimit: 1.0
+          cpuRequest: 1.0
+          memoryLimit: 4.0
+          memoryRequest: 4.0
+          resourceCpuLimit: '1'
+          resourceCpuRequest: '1'
+          resourceMemoryLimit: 4G
+          resourceMemoryRequest: 4G
+    exec-train:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - train
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.11.0'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef train(\n    x_train_pre: Input[Dataset],\n    y_train_pre: Input[Dataset],\n\
+          \    model_artifact: Output[Model],\n    log: Output[Artifact],\n    *,\n\
+          \    batch_size:int = 64,\n    epochs:int = 10,\n    model_version:str =\
+          \ \"1\",\n):\n    from datetime import datetime\n    import tensorflow as\
+          \ tf\n    import pickle\n    import os\n\n    from tensorflow.keras.optimizers\
+          \ import SGD\n    from tensorflow.keras.callbacks import TensorBoard\n\n\
+          \    # cannot declare outside of component\n    class MyCallback(tf.keras.callbacks.Callback):\n\
+          \      def on_epoch_end(self, epoch, logs={}):\n        if(logs.get('accuracy')>0.995):\n\
+          \          print(\"\\nReached 99.5% accuracy so cancelling training!\")\n\
+          \          self.model.stop_training = True\n\n    log_dir = f\"{log.path}/logs/fit/{datetime.now().strftime('%Y%m%d-%H%M%S')}\"\
+          \n    tensorboard_callback = TensorBoard(log_dir=log_dir, histogram_freq=1)\n\
+          \n    with open(x_train_pre.path, \"rb\") as file:\n        x_train = pickle.load(file)\n\
+          \n    with open(y_train_pre.path, \"rb\") as file:\n        y_train = pickle.load(file)\n\
+          \n    model = tf.keras.models.Sequential([\n        tf.keras.layers.Conv2D(filters=10,\
+          \ kernel_size=5, strides=1, padding='valid', input_shape=(28, 28, 1)),\n\
+          \        tf.keras.layers.MaxPooling2D(pool_size=(2, 2)),\n        tf.keras.layers.Activation('relu'),\n\
+          \        tf.keras.layers.Conv2D(filters=20, kernel_size=5, strides=1, padding='valid'),\n\
+          \        tf.keras.layers.SpatialDropout2D(0.5),\n        tf.keras.layers.MaxPooling2D(pool_size=(2,\
+          \ 2)),\n        tf.keras.layers.Activation('relu'),\n        tf.keras.layers.Reshape((320,)),\n\
+          \        tf.keras.layers.Dense(units=50, input_shape=(320,)),\n        tf.keras.layers.Activation('relu'),\n\
+          \        tf.keras.layers.Dropout(0.5),\n        tf.keras.layers.Dense(units=10,\
+          \ input_shape=(50,)),\n        tf.keras.layers.Activation('softmax')\n \
+          \   ])\n\n    learning_rate = 0.01\n    momentum = 0.9\n    optimizer =\
+          \ SGD(learning_rate=learning_rate, momentum=momentum)\n    validation_split\
+          \ = 0.1\n\n    model.compile(\n        optimizer=optimizer,\n        loss=tf.keras.losses.SparseCategoricalCrossentropy(),\n\
+          \        metrics=['accuracy']\n    )\n    history = model.fit(x_train, y_train,\n\
+          \                    batch_size=batch_size,\n                    epochs=epochs,\n\
+          \                    validation_split=validation_split,\n              \
+          \      callbacks=[MyCallback(), tensorboard_callback])\n    os.makedirs(model_artifact.path,\
+          \ exist_ok=True)\n    model.save(f\"{model_artifact.path}/{model_version}_model.keras\"\
+          )\n    # tf.saved_model.save(model, f\"{model_artifact.path}/{model_version}\"\
+          )\n\n"
+        image: tensorflow/tensorflow:latest-gpu
+        resources:
+          cpuLimit: 1.0
+          cpuRequest: 1.0
+          memoryLimit: 6.0
+          memoryRequest: 6.0
+          resourceCpuLimit: '1'
+          resourceCpuRequest: '1'
+          resourceMemoryLimit: 6G
+          resourceMemoryRequest: 6G
+pipelineInfo:
+  name: mnist-pipeline
+root:
+  dag:
+    tasks:
+      evaluate:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-evaluate
+        dependentTasks:
+        - preprocess-data
+        - train
+        inputs:
+          artifacts:
+            model_artifact:
+              taskOutputArtifact:
+                outputArtifactKey: model_artifact
+                producerTask: train
+            x_test_input:
+              taskOutputArtifact:
+                outputArtifactKey: x_test_pre
+                producerTask: preprocess-data
+            y_test_input:
+              taskOutputArtifact:
+                outputArtifactKey: y_test_pre
+                producerTask: preprocess-data
+          parameters:
+            unique_labels:
+              taskOutputParameter:
+                outputParameterKey: unique_classes
+                producerTask: preprocess-data
+        taskInfo:
+          name: evaluate
+      load-data:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-load-data
+        taskInfo:
+          name: load-data
+      preprocess-data:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-preprocess-data
+        dependentTasks:
+        - load-data
+        inputs:
+          artifacts:
+            x_test_input:
+              taskOutputArtifact:
+                outputArtifactKey: x_test_input
+                producerTask: load-data
+            x_train_input:
+              taskOutputArtifact:
+                outputArtifactKey: x_train_input
+                producerTask: load-data
+            y_test_input:
+              taskOutputArtifact:
+                outputArtifactKey: y_test_input
+                producerTask: load-data
+            y_train_input:
+              taskOutputArtifact:
+                outputArtifactKey: y_train_input
+                producerTask: load-data
+        taskInfo:
+          name: preprocess-data
+      train:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train
+        dependentTasks:
+        - preprocess-data
+        inputs:
+          artifacts:
+            x_train_pre:
+              taskOutputArtifact:
+                outputArtifactKey: x_train_pre
+                producerTask: preprocess-data
+            y_train_pre:
+              taskOutputArtifact:
+                outputArtifactKey: y_train_pre
+                producerTask: preprocess-data
+          parameters:
+            epochs:
+              componentInputParameter: epochs
+        taskInfo:
+          name: train
+  inputDefinitions:
+    parameters:
+      epochs:
+        parameterType: NUMBER_INTEGER
+      model_version:
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.11.0
